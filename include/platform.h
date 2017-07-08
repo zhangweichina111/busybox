@@ -108,13 +108,18 @@
  * and/or smaller by using modified ABI. It is usually only needed
  * on non-static, busybox internal functions. Recent versions of gcc
  * optimize statics automatically. FAST_FUNC on static is required
- * only if you need to match a function pointer's type */
-#if __GNUC_PREREQ(3,0) && defined(i386) /* || defined(__x86_64__)? */
+ * only if you need to match a function pointer's type.
+ * FAST_FUNC may not work well with -flto so allow user to disable this.
+ * (-DFAST_FUNC= )
+ */
+#ifndef FAST_FUNC
+# if __GNUC_PREREQ(3,0) && defined(i386)
 /* stdcall makes callee to pop arguments from stack, not caller */
-# define FAST_FUNC __attribute__((regparm(3),stdcall))
+#  define FAST_FUNC __attribute__((regparm(3),stdcall))
 /* #elif ... - add your favorite arch today! */
-#else
-# define FAST_FUNC
+# else
+#  define FAST_FUNC
+# endif
 #endif
 
 /* Make all declarations hidden (-fvisibility flag only affects definitions) */
@@ -368,6 +373,7 @@ typedef unsigned smalluint;
 #define HAVE_DPRINTF 1
 #define HAVE_MEMRCHR 1
 #define HAVE_MKDTEMP 1
+#define HAVE_TTYNAME_R 1
 #define HAVE_PTSNAME_R 1
 #define HAVE_SETBIT 1
 #define HAVE_SIGHANDLER_T 1
@@ -479,9 +485,21 @@ typedef unsigned smalluint;
 #endif
 
 #if defined(ANDROID) || defined(__ANDROID__)
-# undef HAVE_DPRINTF
-# undef HAVE_GETLINE
-# undef HAVE_STPCPY
+# if __ANDROID_API__ < 8
+   /* ANDROID < 8 has no [f]dprintf at all */
+#  undef HAVE_DPRINTF
+# elif __ANDROID_API__ < 21
+   /* ANDROID < 21 has fdprintf */
+#  define dprintf fdprintf
+# else
+   /* ANDROID >= 21 has standard dprintf */
+# endif
+# if __ANDROID_API__ < 21
+#  undef HAVE_TTYNAME_R
+#  undef HAVE_GETLINE
+#  undef HAVE_STPCPY
+# endif
+# undef HAVE_MEMPCPY
 # undef HAVE_STRCHRNUL
 # undef HAVE_STRVERSCMP
 # undef HAVE_UNLOCKED_LINE_OPS
@@ -503,6 +521,11 @@ extern void *memrchr(const void *s, int c, size_t n) FAST_FUNC;
 
 #ifndef HAVE_MKDTEMP
 extern char *mkdtemp(char *template) FAST_FUNC;
+#endif
+
+#ifndef HAVE_TTYNAME_R
+#define ttyname_r bb_ttyname_r
+extern int ttyname_r(int fd, char *buf, size_t buflen);
 #endif
 
 #ifndef HAVE_SETBIT

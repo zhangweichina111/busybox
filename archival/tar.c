@@ -49,13 +49,15 @@
 //config:	  create compressed archives. It's probably the most widely used
 //config:	  UNIX archive program.
 //config:
+//config:config FEATURE_TAR_LONG_OPTIONS
+//config:	bool "Enable long options"
+//config:	default y
+//config:	depends on TAR && LONG_OPTS
+//config:
 //config:config FEATURE_TAR_CREATE
-//config:	bool "Enable archive creation"
+//config:	bool "Enable -c (archive creation)"
 //config:	default y
 //config:	depends on TAR
-//config:	help
-//config:	  If you enable this option you'll be able to create
-//config:	  tar archives using the `-c' option.
 //config:
 //config:config FEATURE_TAR_AUTODETECT
 //config:	bool "Autodetect compressed tarballs"
@@ -74,7 +76,7 @@
 //config:	  a list of files to include or exclude from an archive.
 //config:
 //config:config FEATURE_TAR_OLDGNU_COMPATIBILITY
-//config:	bool "Support for old tar header format"
+//config:	bool "Support old tar header format"
 //config:	default y
 //config:	depends on TAR || DPKG
 //config:	help
@@ -93,22 +95,12 @@
 //config:	  tarballs still exist.
 //config:
 //config:config FEATURE_TAR_GNU_EXTENSIONS
-//config:	bool "Support for GNU tar extensions (long filenames)"
+//config:	bool "Support GNU tar extensions (long filenames)"
 //config:	default y
 //config:	depends on TAR || DPKG
-//config:	help
-//config:	  With this option busybox supports GNU long filenames and
-//config:	  linknames.
-//config:
-//config:config FEATURE_TAR_LONG_OPTIONS
-//config:	bool "Enable long options"
-//config:	default y
-//config:	depends on TAR && LONG_OPTS
-//config:	help
-//config:	  Enable use of long options, increases size by about 400 Bytes
 //config:
 //config:config FEATURE_TAR_TO_COMMAND
-//config:	bool "Support for writing to an external program"
+//config:	bool "Support writing to an external program (--to-command)"
 //config:	default y
 //config:	depends on TAR && FEATURE_TAR_LONG_OPTIONS
 //config:	help
@@ -121,20 +113,17 @@
 //config:	default y
 //config:	depends on TAR
 //config:	help
-//config:	  Enables use of user and group names in tar. This affects contents
+//config:	  Enable use of user and group names in tar. This affects contents
 //config:	  listings (-t) and preserving permissions when unpacking (-p).
 //config:	  +200 bytes.
 //config:
 //config:config FEATURE_TAR_NOPRESERVE_TIME
-//config:	bool "Enable -m (do not preserve time) option"
+//config:	bool "Enable -m (do not preserve time) GNU option"
 //config:	default y
 //config:	depends on TAR
-//config:	help
-//config:	  With this option busybox supports GNU tar -m
-//config:	  (do not preserve time) option.
 //config:
 //config:config FEATURE_TAR_SELINUX
-//config:	bool "Support for extracting SELinux labels"
+//config:	bool "Support extracting SELinux labels"
 //config:	default n
 //config:	depends on TAR && SELINUX
 //config:	help
@@ -146,18 +135,23 @@
 
 #include <fnmatch.h>
 #include "libbb.h"
+#include "common_bufsiz.h"
 #include "bb_archive.h"
 /* FIXME: Stop using this non-standard feature */
 #ifndef FNM_LEADING_DIR
 # define FNM_LEADING_DIR 0
 #endif
 
-
-//#define DBG(fmt, ...) bb_error_msg("%s: " fmt, __func__, ## __VA_ARGS__)
-#define DBG(...) ((void)0)
+#if 0
+# define DBG(fmt, ...) bb_error_msg("%s: " fmt, __func__, ## __VA_ARGS__)
+#else
+# define DBG(...) ((void)0)
+#endif
+#define DBG_OPTION_PARSING 0
 
 
 #define block_buf bb_common_bufsiz1
+#define INIT_G() do { setup_common_bufsiz(); } while (0)
 
 
 #if ENABLE_FEATURE_TAR_CREATE
@@ -535,8 +529,8 @@ static int FAST_FUNC writeFileToTarball(const char *fileName, struct stat *statb
 	/*
 	 * Check to see if we are dealing with a hard link.
 	 * If so -
-	 * Treat the first occurance of a given dev/inode as a file while
-	 * treating any additional occurances as hard links.  This is done
+	 * Treat the first occurrence of a given dev/inode as a file while
+	 * treating any additional occurrences as hard links.  This is done
 	 * by adding the file information to the HardLinkInfo linked list.
 	 */
 	tbInfo->hlInfo = NULL;
@@ -855,6 +849,7 @@ enum {
 	IF_FEATURE_SEAMLESS_Z(   OPTBIT_COMPRESS    ,)
 	IF_FEATURE_TAR_NOPRESERVE_TIME(OPTBIT_NOPRESERVE_TIME,)
 #if ENABLE_FEATURE_TAR_LONG_OPTIONS
+	OPTBIT_STRIP_COMPONENTS,
 	OPTBIT_NORECURSION,
 	IF_FEATURE_TAR_TO_COMMAND(OPTBIT_2COMMAND   ,)
 	OPTBIT_NUMERIC_OWNER,
@@ -879,12 +874,13 @@ enum {
 	OPT_GZIP         = IF_FEATURE_SEAMLESS_GZ(  (1 << OPTBIT_GZIP        )) + 0, // z
 	OPT_XZ           = IF_FEATURE_SEAMLESS_XZ(  (1 << OPTBIT_XZ          )) + 0, // J
 	OPT_COMPRESS     = IF_FEATURE_SEAMLESS_Z(   (1 << OPTBIT_COMPRESS    )) + 0, // Z
-	OPT_NOPRESERVE_TIME = IF_FEATURE_TAR_NOPRESERVE_TIME((1 << OPTBIT_NOPRESERVE_TIME)) + 0, // m
-	OPT_NORECURSION     = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_NORECURSION    )) + 0, // no-recursion
-	OPT_2COMMAND        = IF_FEATURE_TAR_TO_COMMAND(  (1 << OPTBIT_2COMMAND       )) + 0, // to-command
-	OPT_NUMERIC_OWNER   = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_NUMERIC_OWNER  )) + 0, // numeric-owner
-	OPT_NOPRESERVE_PERM = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_NOPRESERVE_PERM)) + 0, // no-same-permissions
-	OPT_OVERWRITE       = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_OVERWRITE      )) + 0, // overwrite
+	OPT_NOPRESERVE_TIME  = IF_FEATURE_TAR_NOPRESERVE_TIME((1 << OPTBIT_NOPRESERVE_TIME)) + 0, // m
+	OPT_STRIP_COMPONENTS = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_STRIP_COMPONENTS)) + 0, // strip-components
+	OPT_NORECURSION      = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_NORECURSION    )) + 0, // no-recursion
+	OPT_2COMMAND         = IF_FEATURE_TAR_TO_COMMAND(  (1 << OPTBIT_2COMMAND       )) + 0, // to-command
+	OPT_NUMERIC_OWNER    = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_NUMERIC_OWNER  )) + 0, // numeric-owner
+	OPT_NOPRESERVE_PERM  = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_NOPRESERVE_PERM)) + 0, // no-same-permissions
+	OPT_OVERWRITE        = IF_FEATURE_TAR_LONG_OPTIONS((1 << OPTBIT_OVERWRITE      )) + 0, // overwrite
 
 	OPT_ANY_COMPRESS = (OPT_BZIP2 | OPT_LZMA | OPT_GZIP | OPT_XZ | OPT_COMPRESS),
 };
@@ -928,6 +924,7 @@ static const char tar_longopts[] ALIGN1 =
 # if ENABLE_FEATURE_TAR_NOPRESERVE_TIME
 	"touch\0"               No_argument       "m"
 # endif
+	"strip-components\0"	Required_argument "\xf9"
 	"no-recursion\0"	No_argument       "\xfa"
 # if ENABLE_FEATURE_TAR_TO_COMMAND
 	"to-command\0"		Required_argument "\xfb"
@@ -957,6 +954,7 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 #if ENABLE_FEATURE_TAR_LONG_OPTIONS && ENABLE_FEATURE_TAR_FROM
 	llist_t *excludes = NULL;
 #endif
+	INIT_G();
 
 	/* Initialise default values */
 	tar_handle = init_handle();
@@ -971,17 +969,29 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 	/* Prepend '-' to the first argument if required */
 	opt_complementary = "--:" // first arg is options
 		"tt:vv:" // count -t,-v
-		IF_FEATURE_TAR_FROM("X::T::") // cumulative lists
 #if ENABLE_FEATURE_TAR_LONG_OPTIONS && ENABLE_FEATURE_TAR_FROM
-		"\xff::" // cumulative lists for --exclude
+		"\xff::" // --exclude=PATTERN is a list
 #endif
 		IF_FEATURE_TAR_CREATE("c:") "t:x:" // at least one of these is reqd
 		IF_FEATURE_TAR_CREATE("c--tx:t--cx:x--ct") // mutually exclusive
-		IF_NOT_FEATURE_TAR_CREATE("t--x:x--t"); // mutually exclusive
+		IF_NOT_FEATURE_TAR_CREATE("t--x:x--t") // mutually exclusive
+#if ENABLE_FEATURE_TAR_LONG_OPTIONS
+		":\xf9+" // --strip-components=NUM
+#endif
+	;
 #if ENABLE_FEATURE_TAR_LONG_OPTIONS
 	applet_long_options = tar_longopts;
 #endif
 #if ENABLE_DESKTOP
+	/* Lie to buildroot when it starts asking stupid questions. */
+	if (argv[1] && strcmp(argv[1], "--version") == 0) {
+		// Output of 'tar --version' examples:
+		// tar (GNU tar) 1.15.1
+		// tar (GNU tar) 1.25
+		// bsdtar 2.8.3 - libarchive 2.8.3
+		puts("tar (busybox) " BB_VER);
+		return 0;
+	}
 	if (argv[1] && argv[1][0] != '-') {
 		/* Compat:
 		 * 1st argument without dash handles options with parameters
@@ -1010,18 +1020,22 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 #endif
 	opt = getopt32(argv,
 		"txC:f:Oopvk"
-		IF_FEATURE_TAR_CREATE(   "ch"  )
-		IF_FEATURE_SEAMLESS_BZ2( "j"   )
-		IF_FEATURE_SEAMLESS_LZMA("a"   )
-		IF_FEATURE_TAR_FROM(     "T:X:")
-		IF_FEATURE_SEAMLESS_GZ(  "z"   )
-		IF_FEATURE_SEAMLESS_XZ(  "J"   )
-		IF_FEATURE_SEAMLESS_Z(   "Z"   )
+		IF_FEATURE_TAR_CREATE(   "ch"    )
+		IF_FEATURE_SEAMLESS_BZ2( "j"     )
+		IF_FEATURE_SEAMLESS_LZMA("a"     )
+		IF_FEATURE_TAR_FROM(     "T:*X:*")
+		IF_FEATURE_SEAMLESS_GZ(  "z"     )
+		IF_FEATURE_SEAMLESS_XZ(  "J"     )
+		IF_FEATURE_SEAMLESS_Z(   "Z"     )
 		IF_FEATURE_TAR_NOPRESERVE_TIME("m")
+		IF_FEATURE_TAR_LONG_OPTIONS("\xf9:") // --strip-components
 		, &base_dir // -C dir
 		, &tar_filename // -f filename
 		IF_FEATURE_TAR_FROM(, &(tar_handle->accept)) // T
 		IF_FEATURE_TAR_FROM(, &(tar_handle->reject)) // X
+#if ENABLE_FEATURE_TAR_LONG_OPTIONS
+		, &tar_handle->tar__strip_components // --strip-components
+#endif
 		IF_FEATURE_TAR_TO_COMMAND(, &(tar_handle->tar__to_command)) // --to-command
 #if ENABLE_FEATURE_TAR_LONG_OPTIONS && ENABLE_FEATURE_TAR_FROM
 		, &excludes // --exclude
@@ -1029,11 +1043,49 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 		, &verboseFlag // combined count for -t and -v
 		, &verboseFlag // combined count for -t and -v
 		);
-	//bb_error_msg("opt:%08x", opt);
+#if DBG_OPTION_PARSING
+	bb_error_msg("opt: 0x%08x", opt);
+# define showopt(o) bb_error_msg("opt & %s(%x): %x", #o, o, opt & o);
+	showopt(OPT_TEST            );
+	showopt(OPT_EXTRACT         );
+	showopt(OPT_BASEDIR         );
+	showopt(OPT_TARNAME         );
+	showopt(OPT_2STDOUT         );
+	showopt(OPT_NOPRESERVE_OWNER);
+	showopt(OPT_P               );
+	showopt(OPT_VERBOSE         );
+	showopt(OPT_KEEP_OLD        );
+	showopt(OPT_CREATE          );
+	showopt(OPT_DEREFERENCE     );
+	showopt(OPT_BZIP2           );
+	showopt(OPT_LZMA            );
+	showopt(OPT_INCLUDE_FROM    );
+	showopt(OPT_EXCLUDE_FROM    );
+	showopt(OPT_GZIP            );
+	showopt(OPT_XZ              );
+	showopt(OPT_COMPRESS        );
+	showopt(OPT_NOPRESERVE_TIME );
+	showopt(OPT_STRIP_COMPONENTS);
+	showopt(OPT_NORECURSION     );
+	showopt(OPT_2COMMAND        );
+	showopt(OPT_NUMERIC_OWNER   );
+	showopt(OPT_NOPRESERVE_PERM );
+	showopt(OPT_OVERWRITE       );
+	showopt(OPT_ANY_COMPRESS    );
+	bb_error_msg("base_dir:'%s'", base_dir);
+	bb_error_msg("tar_filename:'%s'", tar_filename);
+	bb_error_msg("verboseFlag:%d", verboseFlag);
+	bb_error_msg("tar_handle->tar__to_command:'%s'", tar_handle->tar__to_command);
+	bb_error_msg("tar_handle->tar__strip_components:%u", tar_handle->tar__strip_components);
+	return 0;
+# undef showopt
+#endif
 	argv += optind;
 
-	if (verboseFlag) tar_handle->action_header = header_verbose_list;
-	if (verboseFlag == 1) tar_handle->action_header = header_list;
+	if (verboseFlag)
+		tar_handle->action_header = header_verbose_list;
+	if (verboseFlag == 1)
+		tar_handle->action_header = header_list;
 
 	if (opt & OPT_EXTRACT)
 		tar_handle->action_data = data_extract_all;
@@ -1135,9 +1187,10 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 	//	/* We need to know whether child (gzip/bzip/etc) exits abnormally */
 	//	signal(SIGCHLD, check_errors_in_children);
 
+#if ENABLE_FEATURE_TAR_CREATE
 	/* Create an archive */
 	if (opt & OPT_CREATE) {
-#if SEAMLESS_COMPRESSION
+# if SEAMLESS_COMPRESSION
 		const char *zipMode = NULL;
 		if (opt & OPT_COMPRESS)
 			zipMode = "compress";
@@ -1149,7 +1202,7 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 			zipMode = "lzma";
 		if (opt & OPT_XZ)
 			zipMode = "xz";
-#endif
+# endif
 		/* NB: writeTarFile() closes tar_handle->src_fd */
 		return writeTarFile(tar_handle->src_fd, verboseFlag,
 				(opt & OPT_DEREFERENCE ? ACTION_FOLLOWLINKS : 0)
@@ -1157,26 +1210,32 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 				tar_handle->accept,
 				tar_handle->reject, zipMode);
 	}
+#endif
 
 	if (opt & OPT_ANY_COMPRESS) {
 		USE_FOR_MMU(IF_DESKTOP(long long) int FAST_FUNC (*xformer)(transformer_state_t *xstate);)
 		USE_FOR_NOMMU(const char *xformer_prog;)
 
-		if (opt & OPT_COMPRESS)
-			USE_FOR_MMU(xformer = unpack_Z_stream;)
+		if (opt & OPT_COMPRESS) {
+			USE_FOR_MMU(IF_FEATURE_SEAMLESS_Z(xformer = unpack_Z_stream;))
 			USE_FOR_NOMMU(xformer_prog = "uncompress";)
-		if (opt & OPT_GZIP)
-			USE_FOR_MMU(xformer = unpack_gz_stream;)
+		}
+		if (opt & OPT_GZIP) {
+			USE_FOR_MMU(IF_FEATURE_SEAMLESS_GZ(xformer = unpack_gz_stream;))
 			USE_FOR_NOMMU(xformer_prog = "gunzip";)
-		if (opt & OPT_BZIP2)
-			USE_FOR_MMU(xformer = unpack_bz2_stream;)
+		}
+		if (opt & OPT_BZIP2) {
+			USE_FOR_MMU(IF_FEATURE_SEAMLESS_BZ2(xformer = unpack_bz2_stream;))
 			USE_FOR_NOMMU(xformer_prog = "bunzip2";)
-		if (opt & OPT_LZMA)
-			USE_FOR_MMU(xformer = unpack_lzma_stream;)
+		}
+		if (opt & OPT_LZMA) {
+			USE_FOR_MMU(IF_FEATURE_SEAMLESS_LZMA(xformer = unpack_lzma_stream;))
 			USE_FOR_NOMMU(xformer_prog = "unlzma";)
-		if (opt & OPT_XZ)
-			USE_FOR_MMU(xformer = unpack_xz_stream;)
+		}
+		if (opt & OPT_XZ) {
+			USE_FOR_MMU(IF_FEATURE_SEAMLESS_XZ(xformer = unpack_xz_stream;))
 			USE_FOR_NOMMU(xformer_prog = "unxz";)
+		}
 
 		fork_transformer_with_sig(tar_handle->src_fd, xformer, xformer_prog);
 		/* Can't lseek over pipes */

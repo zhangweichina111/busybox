@@ -88,8 +88,6 @@
 //config:	bool "Enable long options"
 //config:	default y
 //config:	depends on DIFF && LONG_OPTS
-//config:	help
-//config:	  Enable use of long options.
 //config:
 //config:config FEATURE_DIFF_DIR
 //config:	bool "Enable directory support"
@@ -125,6 +123,7 @@
 //usage:     "\n	-w	Ignore all whitespace"
 
 #include "libbb.h"
+#include "common_bufsiz.h"
 
 #if 0
 # define dbg_error_msg(...) bb_error_msg(__VA_ARGS__)
@@ -296,17 +295,6 @@ static int search(const int *c, int k, int y, const struct cand *list)
 	}
 }
 
-static unsigned isqrt(unsigned n)
-{
-	unsigned x = 1;
-	while (1) {
-		const unsigned y = x;
-		x = ((n / x) + x) >> 1;
-		if (x <= (y + 1) && x >= (y - 1))
-			return x;
-	}
-}
-
 static void stone(const int *a, int n, const int *b, int *J, int pref)
 {
 	const unsigned isq = isqrt(n);
@@ -363,7 +351,7 @@ static void stone(const int *a, int n, const int *b, int *J, int pref)
 }
 
 struct line {
-	/* 'serial' is not used in the begining, so we reuse it
+	/* 'serial' is not used in the beginning, so we reuse it
 	 * to store line offsets, thus reducing memory pressure
 	 */
 	union {
@@ -433,7 +421,7 @@ static void fetch(FILE_and_pos_t *ft, const off_t *ix, int a, int b, int ch)
 		for (j = 0, col = 0; j < ix[i] - ix[i - 1]; j++) {
 			int c = fgetc(ft->ft_fp);
 			if (c == EOF) {
-				printf("\n\\ No newline at end of file\n");
+				puts("\n\\ No newline at end of file");
 				return;
 			}
 			ft->ft_pos++;
@@ -658,8 +646,8 @@ static bool diff(FILE* fp[2], char *file[2])
 				}
 
 				for (j = 0; j < 2; j++)
-					for (k = v[j].a; k < v[j].b; k++)
-						nonempty |= (ix[j][k+1] - ix[j][k] != 1);
+					for (k = v[j].a; k <= v[j].b; k++)
+						nonempty |= (ix[j][k] - ix[j][k - 1] != 1);
 
 				vec = xrealloc_vector(vec, 6, ++idx);
 				memcpy(vec[idx], v, sizeof(v));
@@ -692,7 +680,7 @@ static bool diff(FILE* fp[2], char *file[2])
 					continue;
 				printf(",%d", (a < b) ? b - a + 1 : 0);
 			}
-			printf(" @@\n");
+			puts(" @@");
 			/*
 			 * Output changes in "unified" diff format--the old and new lines
 			 * are printed together.
@@ -727,9 +715,19 @@ static int diffreg(char *file[2])
 	fp[0] = stdin;
 	fp[1] = stdin;
 	for (i = 0; i < 2; i++) {
-		int fd = open_or_warn_stdin(file[i]);
-		if (fd == -1)
-			goto out;
+		int fd = STDIN_FILENO;
+		if (!LONE_DASH(file[i])) {
+			if (!(option_mask32 & FLAG(N))) {
+				fd = open_or_warn(file[i], O_RDONLY);
+				if (fd == -1)
+					goto out;
+			} else {
+				/* -N: if some file does not exist compare it like empty */
+				fd = open(file[i], O_RDONLY);
+				if (fd == -1)
+					fd = xopen("/dev/null", O_RDONLY);
+			}
+		}
 		/* Our diff implementation is using seek.
 		 * When we meet non-seekable file, we must make a temp copy.
 		 */
@@ -748,6 +746,7 @@ static int diffreg(char *file[2])
 		fp[i] = fdopen(fd, "r");
 	}
 
+	setup_common_bufsiz();
 	while (1) {
 		const size_t sz = COMMON_BUFSIZE / 2;
 		char *const buf0 = bb_common_bufsiz1;
@@ -980,26 +979,32 @@ int diff_main(int argc UNUSED_PARAM, char **argv)
 	INIT_G();
 
 	/* exactly 2 params; collect multiple -L <label>; -U N */
-	opt_complementary = "=2:L::U+";
+	opt_complementary = "=2";
 #if ENABLE_FEATURE_DIFF_LONG_OPTIONS
 	applet_long_options = diff_longopts;
 #endif
-	getopt32(argv, "abdiL:NqrsS:tTU:wupBE",
+	getopt32(argv, "abdiL:*NqrsS:tTU:+wupBE",
 			&L_arg, &s_start, &opt_U_context);
 	argv += optind;
 	while (L_arg)
 		label[!!label[0]] = llist_pop(&L_arg);
+
+	/* Compat: "diff file name_which_doesnt_exist" exits with 2 */
 	xfunc_error_retval = 2;
 	for (i = 0; i < 2; i++) {
 		file[i] = argv[i];
-		/* Compat: "diff file name_which_doesnt_exist" exits with 2 */
 		if (LONE_DASH(file[i])) {
 			fstat(STDIN_FILENO, &stb[i]);
 			gotstdin++;
-		} else
+		} else if (option_mask32 & FLAG(N)) {
+			if (stat(file[i], &stb[i]))
+				xstat("/dev/null", &stb[i]);
+		} else {
 			xstat(file[i], &stb[i]);
+		}
 	}
 	xfunc_error_retval = 1;
+
 	if (gotstdin && (S_ISDIR(stb[0].st_mode) || S_ISDIR(stb[1].st_mode)))
 		bb_error_msg_and_die("can't compare stdin to a directory");
 

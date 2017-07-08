@@ -89,8 +89,6 @@
 //config:	bool "Enable -perm: permissions matching"
 //config:	default y
 //config:	depends on FIND
-//config:	help
-//config:	  Enable searching based on file permissions.
 //config:
 //config:config FEATURE_FIND_TYPE
 //config:	bool "Enable -type: file type matching (file/dir/link/...)"
@@ -104,15 +102,11 @@
 //config:	bool "Enable -xdev: 'stay in filesystem'"
 //config:	default y
 //config:	depends on FIND
-//config:	help
-//config:	  This option allows find to restrict searches to a single filesystem.
 //config:
 //config:config FEATURE_FIND_MAXDEPTH
 //config:	bool "Enable -mindepth N and -maxdepth N"
 //config:	default y
 //config:	depends on FIND
-//config:	help
-//config:	  This option enables -mindepth N and -maxdepth N option.
 //config:
 //config:config FEATURE_FIND_NEWER
 //config:	bool "Enable -newer: compare file modification times"
@@ -126,8 +120,6 @@
 //config:	bool "Enable -inum: inode number matching"
 //config:	default y
 //config:	depends on FIND
-//config:	help
-//config:	  Support the 'find -inum' option for searching by inode number.
 //config:
 //config:config FEATURE_FIND_EXEC
 //config:	bool "Enable -exec: execute commands"
@@ -151,15 +143,11 @@
 //config:	bool "Enable -user: username/uid matching"
 //config:	default y
 //config:	depends on FIND
-//config:	help
-//config:	  Support the 'find -user' option for searching by username or uid.
 //config:
 //config:config FEATURE_FIND_GROUP
 //config:	bool "Enable -group: group/gid matching"
 //config:	default y
 //config:	depends on FIND
-//config:	help
-//config:	  Support the 'find -group' option for searching by group name or gid.
 //config:
 //config:config FEATURE_FIND_NOT
 //config:	bool "Enable the 'not' (!) operator"
@@ -188,15 +176,13 @@
 //config:	bool "Enable -size: file size matching"
 //config:	default y
 //config:	depends on FIND
-//config:	help
-//config:	  Support the 'find -size' option for searching by file size.
 //config:
 //config:config FEATURE_FIND_PRUNE
 //config:	bool "Enable -prune: exclude subdirectories"
 //config:	default y
 //config:	depends on FIND
 //config:	help
-//config:	  If the file is a directory, dont descend into it. Useful for
+//config:	  If the file is a directory, don't descend into it. Useful for
 //config:	  exclusion .svn and CVS directories.
 //config:
 //config:config FEATURE_FIND_DELETE
@@ -342,6 +328,7 @@
 
 #include <fnmatch.h>
 #include "libbb.h"
+#include "common_bufsiz.h"
 #if ENABLE_FEATURE_FIND_REGEX
 # include "xregex.h"
 #endif
@@ -421,11 +408,10 @@ struct globals {
 	recurse_flags_t recurse_flags;
 	IF_FEATURE_FIND_EXEC_PLUS(unsigned max_argv_len;)
 } FIX_ALIASING;
-#define G (*(struct globals*)&bb_common_bufsiz1)
+#define G (*(struct globals*)bb_common_bufsiz1)
 #define INIT_G() do { \
-	struct G_sizecheck { \
-		char G_sizecheck[sizeof(G) > COMMON_BUFSIZE ? -1 : 1]; \
-	}; \
+	setup_common_bufsiz(); \
+	BUILD_BUG_ON(sizeof(G) > COMMON_BUFSIZE); \
 	/* we have to zero it out because of NOEXEC */ \
 	memset(&G, 0, sizeof(G)); \
 	IF_FEATURE_FIND_MAXDEPTH(G.minmaxdepth[1] = INT_MAX;) \
@@ -502,26 +488,54 @@ static char *strcpy_upcase(char *dst, const char *src)
 
 ACTF(name)
 {
+	int r;
 	const char *tmp = bb_basename(fileName);
-	if (tmp != fileName && *tmp == '\0') {
-		/* "foo/bar/". Oh no... go back to 'b' */
-		tmp--;
-		while (tmp != fileName && *--tmp != '/')
-			continue;
-		if (*tmp == '/')
-			tmp++;
+	/* GNU findutils: find DIR/ -name DIR
+	 * prints "DIR/" (DIR// prints "DIR//" etc).
+	 * Need to strip trailing "/".
+	 * Such names can come only from top-level names, but
+	 * we can't do this before recursive_action() call,
+	 * since then "find FILE/ -name FILE"
+	 * would also work (on non-directories), which is wrong.
+	 */
+	char *trunc_slash = NULL;
+
+	if (*tmp == '\0') {
+		/* "foo/bar/[//...]" */
+		while (tmp != fileName && tmp[-1] == '/')
+			tmp--;
+		if (tmp == fileName) { /* entire fileName is "//.."? */
+			/* yes, convert "//..." to "/"
+			 * Testcases:
+			 * find / -maxdepth 1 -name /: prints /
+			 * find // -maxdepth 1 -name /: prints //
+			 * find / -maxdepth 1 -name //: prints nothing
+			 * find // -maxdepth 1 -name //: prints nothing
+			 */
+			if (tmp[1])
+				trunc_slash = (char*)tmp + 1;
+		} else {
+			/* no, it's "foo/bar/[//...]", go back to 'b' */
+			trunc_slash = (char*)tmp;
+			while (tmp != fileName && tmp[-1] != '/')
+				tmp--;
+		}
 	}
+
 	/* Was using FNM_PERIOD flag too,
 	 * but somewhere between 4.1.20 and 4.4.0 GNU find stopped using it.
 	 * find -name '*foo' should match .foo too:
 	 */
+	if (trunc_slash) *trunc_slash = '\0';
 #if FNM_CASEFOLD
-	return fnmatch(ap->pattern, tmp, (ap->iname ? FNM_CASEFOLD : 0)) == 0;
+	r = fnmatch(ap->pattern, tmp, (ap->iname ? FNM_CASEFOLD : 0));
 #else
 	if (ap->iname)
 		tmp = strcpy_upcase(alloca(strlen(tmp) + 1), tmp);
-	return fnmatch(ap->pattern, tmp, 0) == 0;
+	r = fnmatch(ap->pattern, tmp, 0);
 #endif
+	if (trunc_slash) *trunc_slash = '/';
+	return r == 0;
 }
 
 #if ENABLE_FEATURE_FIND_PATH
@@ -768,7 +782,10 @@ ACTF(delete)
 {
 	int rc;
 	if (S_ISDIR(statbuf->st_mode)) {
-		rc = rmdir(fileName);
+		/* "find . -delete" skips rmdir(".") */
+		rc = 0;
+		if (NOT_LONE_CHAR(fileName, '.'))
+			rc = rmdir(fileName);
 	} else {
 		rc = unlink(fileName);
 	}
@@ -881,7 +898,7 @@ static int find_type(const char *type)
 		mask = S_IFSOCK;
 
 	if (mask == 0 || type[1] != '\0')
-		bb_error_msg_and_die(bb_msg_invalid_arg, type, "-type");
+		bb_error_msg_and_die(bb_msg_invalid_arg_to, type, "-type");
 
 	return mask;
 }
@@ -1261,7 +1278,8 @@ static action*** parse_params(char **argv)
 			ap->perm_char = arg1[0];
 			arg1 = (arg1[0] == '/' ? arg1+1 : plus_minus_num(arg1));
 			/*ap->perm_mask = 0; - ALLOC_ACTION did it */
-			if (!bb_parse_mode(arg1, &ap->perm_mask))
+			ap->perm_mask = bb_parse_mode(arg1, ap->perm_mask);
+			if (ap->perm_mask == (mode_t)-1)
 				bb_error_msg_and_die("invalid mode '%s'", arg1);
 		}
 #endif
@@ -1460,12 +1478,10 @@ int find_main(int argc UNUSED_PARAM, char **argv)
 				NULL,           /* user data */
 				0)              /* depth */
 		) {
-			status = EXIT_FAILURE;
-			goto out;
+			status |= EXIT_FAILURE;
 		}
 	}
 
-	IF_FEATURE_FIND_EXEC_PLUS(status = flush_exec_plus();)
-out:
+	IF_FEATURE_FIND_EXEC_PLUS(status |= flush_exec_plus();)
 	return status;
 }

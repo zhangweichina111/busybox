@@ -8,6 +8,51 @@
  *
  * Licensed under GPLv2, see file LICENSE in this source tree.
  */
+//config:config PS
+//config:	bool "ps"
+//config:	default y
+//config:	help
+//config:	  ps gives a snapshot of the current processes.
+//config:
+//config:config FEATURE_PS_WIDE
+//config:	bool "Enable wide output option (-w)"
+//config:	default y
+//config:	depends on PS && !DESKTOP
+//config:	help
+//config:	  Support argument 'w' for wide output.
+//config:	  If given once, 132 chars are printed, and if given more
+//config:	  than once, the length is unlimited.
+//config:
+//config:config FEATURE_PS_LONG
+//config:	bool "Enable long output option (-l)"
+//config:	default y
+//config:	depends on PS && !DESKTOP
+//config:	help
+//config:	  Support argument 'l' for long output.
+//config:	  Adds fields PPID, RSS, START, TIME & TTY
+//config:
+//config:config FEATURE_PS_TIME
+//config:	bool "Support -o time and -o etime output specifiers"
+//config:	default y
+//config:	depends on PS && DESKTOP
+//config:	select PLATFORM_LINUX
+//config:
+//config:config FEATURE_PS_UNUSUAL_SYSTEMS
+//config:	bool "Support Linux prior to 2.4.0 and non-ELF systems"
+//config:	default n
+//config:	depends on FEATURE_PS_TIME
+//config:	help
+//config:	  Include support for measuring HZ on old kernels and non-ELF systems
+//config:	  (if you are on Linux 2.4.0+ and use ELF, you don't need this)
+//config:
+//config:config FEATURE_PS_ADDITIONAL_COLUMNS
+//config:	bool "Support -o rgroup, -o ruser, -o nice specifiers"
+//config:	default y
+//config:	depends on PS && DESKTOP
+
+//applet:IF_PS(APPLET(ps, BB_DIR_BIN, BB_SUID_DROP))
+
+//kbuild:lib-$(CONFIG_PS) += ps.o
 
 //usage:#if ENABLE_DESKTOP
 //usage:
@@ -62,6 +107,7 @@
 //usage:       " 2990 andersen andersen R ps\n"
 
 #include "libbb.h"
+#include "common_bufsiz.h"
 #ifdef __linux__
 # include <sys/sysinfo.h>
 #endif
@@ -144,7 +190,7 @@ struct globals {
 	unsigned long seconds_since_boot;
 #endif
 } FIX_ALIASING;
-#define G (*(struct globals*)&bb_common_bufsiz1)
+#define G (*(struct globals*)bb_common_bufsiz1)
 #define out                (G.out               )
 #define out_cnt            (G.out_cnt           )
 #define print_header       (G.print_header      )
@@ -152,7 +198,7 @@ struct globals {
 #define buffer             (G.buffer            )
 #define terminal_width     (G.terminal_width    )
 #define kernel_HZ          (G.kernel_HZ         )
-#define INIT_G() do { } while (0)
+#define INIT_G() do { setup_common_bufsiz(); } while (0)
 
 #if ENABLE_FEATURE_PS_TIME
 /* for ELF executables, notes are pushed before environment and args */
@@ -562,7 +608,9 @@ int ps_main(int argc UNUSED_PARAM, char **argv)
 	procps_status_t *p;
 	llist_t* opt_o = NULL;
 	char default_o[sizeof(DEFAULT_O_STR)];
+#if ENABLE_SELINUX || ENABLE_FEATURE_SHOW_THREADS
 	int opt;
+#endif
 	enum {
 		OPT_Z = (1 << 0),
 		OPT_o = (1 << 1),
@@ -592,8 +640,11 @@ int ps_main(int argc UNUSED_PARAM, char **argv)
 	 * procps v3.2.7 supports -T and shows tids as SPID column,
 	 * it also supports -L where it shows tids as LWP column.
 	 */
-	opt_complementary = "o::";
-	opt = getopt32(argv, "Zo:aAdefl"IF_FEATURE_SHOW_THREADS("T"), &opt_o);
+#if ENABLE_SELINUX || ENABLE_FEATURE_SHOW_THREADS
+	opt =
+#endif
+		getopt32(argv, "Zo:*aAdefl"IF_FEATURE_SHOW_THREADS("T"), &opt_o);
+
 	if (opt_o) {
 		do {
 			parse_o(llist_pop(&opt_o));
@@ -622,7 +673,7 @@ int ps_main(int argc UNUSED_PARAM, char **argv)
 	 * and such large widths */
 	terminal_width = MAX_WIDTH;
 	if (isatty(1)) {
-		get_terminal_width_height(0, &terminal_width, NULL);
+		terminal_width = get_terminal_width(0);
 		if (--terminal_width > MAX_WIDTH)
 			terminal_width = MAX_WIDTH;
 	}
@@ -654,8 +705,8 @@ int ps_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 		OPT_l = (1 << ENABLE_SELINUX) * (1 << ENABLE_FEATURE_SHOW_THREADS) * ENABLE_FEATURE_PS_LONG,
 	};
 #if ENABLE_FEATURE_PS_LONG
-	time_t now = now;
-	unsigned long uptime;
+	time_t now = now; /* for compiler */
+	unsigned long uptime = uptime;
 #endif
 	/* If we support any options, parse argv */
 #if ENABLE_SELINUX || ENABLE_FEATURE_SHOW_THREADS || ENABLE_FEATURE_PS_WIDE || ENABLE_FEATURE_PS_LONG
@@ -672,7 +723,7 @@ int ps_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 	if (w_count) {
 		terminal_width = (w_count == 1) ? 132 : MAX_WIDTH;
 	} else {
-		get_terminal_width_height(0, &terminal_width, NULL);
+		terminal_width = get_terminal_width(0);
 		/* Go one less... */
 		if (--terminal_width > MAX_WIDTH)
 			terminal_width = MAX_WIDTH;
@@ -786,9 +837,11 @@ int ps_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 
 		{
 			int sz = terminal_width - len;
-			char buf[sz + 1];
-			read_cmdline(buf, sz, p->pid, p->comm);
-			puts(buf);
+			if (sz >= 0) {
+				char buf[sz + 1];
+				read_cmdline(buf, sz, p->pid, p->comm);
+				puts(buf);
+			}
 		}
 	}
 	if (ENABLE_FEATURE_CLEAN_UP)

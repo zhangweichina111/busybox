@@ -52,7 +52,7 @@
 //usage:       "	-f	Foreground"
 //usage:     "\n	-b	Background (default)"
 //usage:     "\n	-S	Log to syslog (default)"
-//usage:     "\n	-l N	Set log level. Most verbose:0, default:8"
+//usage:     "\n	-l N	Set log level. Most verbose 0, default 8"
 //usage:	IF_FEATURE_CROND_D(
 //usage:     "\n	-d N	Set log level, log to stderr"
 //usage:	)
@@ -60,6 +60,7 @@
 //usage:     "\n	-c DIR	Cron dir. Default:"CONFIG_FEATURE_CROND_DIR"/crontabs"
 
 #include "libbb.h"
+#include "common_bufsiz.h"
 #include <syslog.h>
 
 /* glibc frees previous setenv'ed value when we do next setenv()
@@ -140,8 +141,9 @@ struct globals {
 	char *env_var_logname;
 #endif
 } FIX_ALIASING;
-#define G (*(struct globals*)&bb_common_bufsiz1)
+#define G (*(struct globals*)bb_common_bufsiz1)
 #define INIT_G() do { \
+	setup_common_bufsiz(); \
 	G.log_level = 8; \
 	G.crontab_dir_name = CRONTABS; \
 } while (0)

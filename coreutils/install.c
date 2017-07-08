@@ -5,6 +5,20 @@
  *
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
+//config:config INSTALL
+//config:	bool "install"
+//config:	default y
+//config:	help
+//config:	  Copy files and set attributes.
+//config:
+//config:config FEATURE_INSTALL_LONG_OPTIONS
+//config:	bool "Enable long options"
+//config:	default y
+//config:	depends on INSTALL && LONG_OPTS
+
+//applet:IF_INSTALL(APPLET(install, BB_DIR_USR_BIN, BB_SUID_DROP))
+
+//kbuild:lib-$(CONFIG_INSTALL) += install.o
 
 /* -v, -b, -c are ignored */
 //usage:#define install_trivial_usage
@@ -159,7 +173,7 @@ int install_main(int argc, char **argv)
 	}
 	mode = 0755; /* GNU coreutils 6.10 compat */
 	if (opts & OPT_MODE)
-		bb_parse_mode(mode_str, &mode);
+		mode = bb_parse_mode(mode_str, mode);
 	uid = (opts & OPT_OWNER) ? get_ug_id(uid_str, xuname2uid) : getuid();
 	gid = (opts & OPT_GROUP) ? get_ug_id(gid_str, xgroup2gid) : getgid();
 
@@ -195,7 +209,8 @@ int install_main(int argc, char **argv)
 				char *ddir = xstrdup(dest);
 				bb_make_directory(dirname(ddir), 0755, mkdir_flags);
 				/* errors are not checked. copy_file
-				 * will fail if dir is not created. */
+				 * will fail if dir is not created.
+				 */
 				free(ddir);
 			}
 			if (isdir)

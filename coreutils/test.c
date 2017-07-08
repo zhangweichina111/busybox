@@ -19,11 +19,6 @@
  * Original copyright notice states:
  *     "This program is in the Public Domain."
  */
-
-//kbuild:lib-$(CONFIG_TEST)      += test.o test_ptr_hack.o
-//kbuild:lib-$(CONFIG_ASH)       += test.o test_ptr_hack.o
-//kbuild:lib-$(CONFIG_HUSH)      += test.o test_ptr_hack.o
-
 //config:config TEST
 //config:	bool "test"
 //config:	default y
@@ -32,21 +27,39 @@
 //config:	  returning an appropriate exit code. The bash shell
 //config:	  has test built in, ash can build it in optionally.
 //config:
+//config:config TEST1
+//config:	bool "test as ["
+//config:	default y
+//config:	help
+//config:	  Provide test command in the "[ EXPR ]" form
+//config:
+//config:config TEST2
+//config:	bool "test as [["
+//config:	default y
+//config:	help
+//config:	  Provide test command in the "[[ EXPR ]]" form
+//config:
 //config:config FEATURE_TEST_64
 //config:	bool "Extend test to 64 bit"
 //config:	default y
-//config:	depends on TEST || ASH_BUILTIN_TEST || HUSH
+//config:	depends on TEST || TEST1 || TEST2 || ASH_TEST || HUSH_TEST
 //config:	help
 //config:	  Enable 64-bit support in test.
 
-/* "test --help" does not print help (POSIX compat), only "[ --help" does.
- * We display "<applet> EXPRESSION ]" here (not "<applet> EXPRESSION")
- * Unfortunately, it screws up generated BusyBox.html. TODO. */
-//usage:#define test_trivial_usage
-//usage:       "EXPRESSION ]"
-//usage:#define test_full_usage "\n\n"
-//usage:       "Check file types, compare values etc. Return a 0/1 exit code\n"
-//usage:       "depending on logical value of EXPRESSION"
+//applet:IF_TEST(APPLET_NOFORK(test, test, BB_DIR_USR_BIN, BB_SUID_DROP, test))
+//applet:IF_TEST1(APPLET_NOFORK([,   test, BB_DIR_USR_BIN, BB_SUID_DROP, test))
+//applet:IF_TEST2(APPLET_NOFORK([[,  test, BB_DIR_USR_BIN, BB_SUID_DROP, test))
+
+//kbuild:lib-$(CONFIG_TEST)  += test.o test_ptr_hack.o
+//kbuild:lib-$(CONFIG_TEST1) += test.o test_ptr_hack.o
+//kbuild:lib-$(CONFIG_TEST2) += test.o test_ptr_hack.o
+
+//kbuild:lib-$(CONFIG_ASH_TEST)  += test.o test_ptr_hack.o
+//kbuild:lib-$(CONFIG_HUSH_TEST) += test.o test_ptr_hack.o
+
+/* "test --help" is special-cased to ignore --help */
+//usage:#define test_trivial_usage NOUSAGE_STR
+//usage:#define test_full_usage ""
 //usage:
 //usage:#define test_example_usage
 //usage:       "$ test 1 -eq 2\n"
@@ -399,6 +412,7 @@ extern struct test_statics *const test_ptr_to_statics;
 	barrier(); \
 } while (0)
 #define DEINIT_S() do { \
+	free(group_array); \
 	free(test_ptr_to_statics); \
 } while (0)
 
@@ -549,25 +563,10 @@ static int binop(void)
 	/*return 1; - NOTREACHED */
 }
 
-
 static void initialize_group_array(void)
 {
-	int n;
-
-	/* getgroups may be expensive, try to use it only once */
-	ngroups = 32;
-	do {
-		/* FIXME: ash tries so hard to not die on OOM,
-		 * and we spoil it with just one xrealloc here */
-		/* We realloc, because test_main can be entered repeatedly by shell.
-		 * Testcase (ash): 'while true; do test -x some_file; done'
-		 * and watch top. (some_file must have owner != you) */
-		n = ngroups;
-		group_array = xrealloc(group_array, n * sizeof(gid_t));
-		ngroups = getgroups(n, group_array);
-	} while (ngroups > n);
+	group_array = bb_getgroups(&ngroups, NULL);
 }
-
 
 /* Return non-zero if GID is one that we have in our groups list. */
 //XXX: FIXME: duplicate of existing libbb function?
@@ -596,13 +595,9 @@ static int is_a_group_member(gid_t gid)
 /* Do the same thing access(2) does, but use the effective uid and gid,
    and don't make the mistake of telling root that any file is
    executable. */
-static int test_eaccess(char *path, int mode)
+static int test_eaccess(struct stat *st, int mode)
 {
-	struct stat st;
 	unsigned int euid = geteuid();
-
-	if (stat(path, &st) < 0)
-		return -1;
 
 	if (euid == 0) {
 		/* Root can read or write any file. */
@@ -611,16 +606,16 @@ static int test_eaccess(char *path, int mode)
 
 		/* Root can execute any file that has any one of the execute
 		 * bits set. */
-		if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+		if (st->st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
 			return 0;
 	}
 
-	if (st.st_uid == euid)  /* owner */
+	if (st->st_uid == euid)  /* owner */
 		mode <<= 6;
-	else if (is_a_group_member(st.st_gid))
+	else if (is_a_group_member(st->st_gid))
 		mode <<= 3;
 
-	if (st.st_mode & mode)
+	if (st->st_mode & mode)
 		return 0;
 
 	return -1;
@@ -653,7 +648,7 @@ static int filstat(char *nm, enum token mode)
 			i = W_OK;
 		if (mode == FILEX)
 			i = X_OK;
-		return test_eaccess(nm, i) == 0;
+		return test_eaccess(&s, i) == 0;
 	}
 	if (is_file_type(mode)) {
 		if (mode == FILREG)
@@ -828,7 +823,9 @@ int test_main(int argc, char **argv)
 	const char *arg0;
 
 	arg0 = bb_basename(argv[0]);
-	if (arg0[0] == '[') {
+	if ((ENABLE_TEST1 || ENABLE_TEST2 || ENABLE_ASH_TEST || ENABLE_HUSH_TEST)
+	 && (arg0[0] == '[')
+	) {
 		--argc;
 		if (!arg0[1]) { /* "[" ? */
 			if (NOT_LONE_CHAR(argv[argc], ']')) {
